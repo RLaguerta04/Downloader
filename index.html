@@ -109,6 +109,7 @@ div#tabbar { margin: 0px 8px; border-radius: 6px; }
 .chat__msg { max-width: 86%; padding: 7px 10px; border-radius: 12px; font-size: 12px; line-height: 1.5; white-space: pre-wrap; word-break: break-word; }
 .chat__msg--user { align-self: flex-end; background: #f45513; color: #ffffff; border-bottom-right-radius: 4px; }
 .chat__msg--bot { align-self: flex-start; background: #f2f2f2; color: #1d1d1d; border-bottom-left-radius: 4px; }
+.chat__msg--followup { background: transparent; color: #808080; padding: 4px 2px 0; font-size: 11.5px; }
 .chat__row { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
 .chat__chip { font-size: 11px; padding: 4px 9px; border: 1px solid #e4e4e7; border-radius: 9999px; background: #fff; color: #272727; cursor: pointer; transition: all .15s; }
 .chat__chip:hover { border-color: #f45513; color: #f45513; }
@@ -304,6 +305,7 @@ div#tabbar { margin: 0px 8px; border-radius: 6px; }
           `<div class="tip-row"><dt>Speed</dt><dd>${speedText(r)}</dd></div>`,
           `<div class="tip-row"><dt>Date Added</dt><dd>${esc(r.date || '—')}</dd></div>`,
         ];
+        if (qualityOverride[id]) rows.push(`<div class="tip-row"><dt>Quality</dt><dd>${esc(qualityOverride[id])}</dd></div>`);
         if (r.caption) rows.push(`<div class="tip-row"><dt>Caption</dt><dd>Available</dd></div>`);
         rows.push(`<div class="tip-row"><dt>Source</dt><dd><span class="tip-dot" style="background:${sc.color}"></span>${sc.name}</dd></div>`);
         return `<div class="tip-title">${esc(r.title)}</div><dl>${rows.join('')}</dl>`;
@@ -326,6 +328,7 @@ div#tabbar { margin: 0px 8px; border-radius: 6px; }
       const removed = new Set();
       const statusOverride = {};
       const formatOverride = {};
+      const qualityOverride = {};
       let lastDeleted = [];
 
       /* ---------- pieces ---------- */
@@ -672,15 +675,16 @@ div#tabbar { margin: 0px 8px; border-radius: 6px; }
         undo() { if (!lastDeleted.length) return 'Nothing to undo.'; lastDeleted.forEach((id) => removed.delete(id)); const n = lastDeleted.length; lastDeleted = []; refreshTable(); return `Restored ${n} item(s).`; },
         setStatus(items, st, verb) { items.forEach((d) => (statusOverride[d.id] = st)); refreshTable(); return items.length ? `${verb} ${items.length} item(s).` : `Nothing to ${verb.toLowerCase()}.`; },
         favorite(items, on) { items.forEach((d) => (on ? favorites.add(d.id) : favorites.delete(d.id))); refreshTable(); return items.length ? `${on ? 'Added' : 'Removed'} ${items.length} item(s) ${on ? 'to' : 'from'} favorites.` : 'No matching item.'; },
+        setFormat(items, fmt, quality) { if (!items.length) return 'No matching items to update.'; items.forEach((d) => { if (fmt) formatOverride[d.id] = fmt; if (quality) qualityOverride[d.id] = quality; }); refreshTable(); const label = [fmt ? fmt.toUpperCase() : null, quality].filter(Boolean).join(' · '); return `Set ${items.length} item(s) to ${label}.`; },
         expand(item) { expanded.add(item.id); refreshTable(); return `Expanded ${item.title}.`; },
         collapseAll() { expanded.clear(); refreshTable(); return 'Collapsed all channels.'; },
         expandAll() { downloads.forEach((d) => d.children && expanded.add(d.id)); refreshTable(); return 'Expanded all channels.'; },
         info(st) { const items = downloads.filter((d) => !removed.has(d.id) && (st ? matchesStatus(d, st) : true)); return st ? `There ${items.length === 1 ? 'is' : 'are'} ${items.length} ${statusName(st).toLowerCase()} item(s).` : `There are ${items.length} downloads in total.`; },
       };
 
-      const HELP_CHIPS = ['Find videos about lofi beats', 'Show subscriptions', 'Select all', 'Delete selected', 'Expand Sasquatch', 'How many downloads?'];
+      const HELP_CHIPS = ['Find videos about lofi beats', 'Show subscriptions', 'Select all', 'Expand Sasquatch', 'How many downloads?'];
       const helpText = () =>
-        'Here’s what I can do:\n• Find on the web — “find videos about lofi beats”, then Add to queue\n• Search list — “search gamedev”\n• Filter — “show subscriptions”, “downloading”\n• Navigate — “open plugins tab”, “next page”\n• Select — “select all”, “select subscriptions”\n• Delete — “delete selected” (I’ll confirm first)\n• Control — “pause all”, “start downloads”\n• Favorite — “favorite the Gabriela video”\n• Expand — “expand Sasquatch”, “collapse all”\n• Info — “how many downloads?”';
+        'Here’s what I can do:\n• Find on the web — “find videos about lofi beats”, then Add to queue\n• Search list — “search gamedev”\n• Filter — “show subscriptions”, “downloading”\n• Navigate — “open plugins tab”, “next page”\n• Select — “select all”, “select subscriptions”\n• Delete — “delete selected” (I’ll confirm first)\n• Control — “pause all”, “start downloads”\n• Favorite — “favorite the Gabriela video”\n• Convert — “convert selected to mp3”, “set all to 1080p”\n• Expand — “expand Sasquatch”, “collapse all”\n• Info — “how many downloads?”';
 
       function interpret(raw) {
         const t = raw.toLowerCase().trim();
@@ -719,6 +723,28 @@ div#tabbar { margin: 0px 8px; border-radius: 6px; }
 
         if (/\b(unfavorite|unlike|remove from favorites)\b/.test(t)) { const q = extractAfter(t, '(?:unfavorite|unlike|favorites)'); const m = q ? matchByQuery(q) : (resolveTargets(t)?.items || []); return { run: () => actions.favorite(m, false) }; }
         if (/\b(favorite|favourite|like|heart)\b/.test(t)) { const q = extractAfter(t, '(?:favorite|favourite|like|heart)'); const m = q ? matchByQuery(q) : (resolveTargets(t)?.items || []); if (!m.length) return { reply: 'Which item should I favorite? Try “favorite the Gabriela video”.' }; return { run: () => actions.favorite(m, true) }; }
+
+        // Bulk format / quality (Feature 1)
+        {
+          const fmtM = t.match(/\b(mp3|m4a|mp4|wav|flac|webm|mkv|aac|opus|mov|avi)\b/);
+          const qM = t.match(/\b(4k|8k|2160p?|1440p|1080p|720p|480p|360p)\b/);
+          const wantsAudio = /\b(audio only|extract audio|to audio|as audio|just the audio)\b/.test(t);
+          const trigger = /\b(convert|reformat|re-?encode|transcode|format|quality|resolution)\b/.test(t) || /\b(as|to|in|into)\s+(mp3|m4a|mp4|wav|flac|webm|mkv|aac|opus|mov|avi|4k|8k|2160p?|1440p|1080p|720p|480p|360p)\b/.test(t) || wantsAudio;
+          if ((fmtM || qM || wantsAudio) && trigger) {
+            const QMAP = { '4k': '2160p (4K)', '8k': '4320p (8K)', '2160': '2160p' };
+            const fmt = fmtM ? fmtM[1] : (wantsAudio ? 'm4a' : null);
+            const quality = qM ? (QMAP[qM[1]] || qM[1]) : (/\b(best|highest|max quality)\b/.test(t) ? 'Best available' : null);
+            let items, desc;
+            const tgt = resolveTargets(t);
+            if (tgt) { items = tgt.items; desc = tgt.desc; }
+            else {
+              const q = t.replace(/\b(convert|reformat|re-?encode|transcode|download|save|set|change|make|format|quality|resolution|as|to|in|into|the|it|them|please|only|audio|extract|just)\b/g, '').replace(/\b(mp3|m4a|mp4|wav|flac|webm|mkv|aac|opus|mov|avi|4k|8k|2160p?|1440p|1080p|720p|480p|360p|best|highest|max)\b/g, '').replace(/[?.,"']/g, '').replace(/\s+/g, ' ').trim();
+              if (q) { items = matchByQuery(q); desc = `item(s) matching “${q}”`; }
+              else { items = visibleItems(); desc = 'item(s)'; }
+            }
+            return { run: () => actions.setFormat(items, fmt, quality) };
+          }
+        }
 
         if (/\bexpand all\b/.test(t)) return { run: () => actions.expandAll() };
         if (/\bcollapse\b/.test(t)) return { run: () => actions.collapseAll() };
@@ -771,7 +797,7 @@ div#tabbar { margin: 0px 8px; border-radius: 6px; }
             else if (m.results) extra = resultsHTML(m.results);
             else if (m.linkId) extra = linkCardHTML(m.linkId);
             else if (m.chips) extra = `<div class="chat__row">${m.chips.map((c) => `<button class="chat__chip" data-chip="${esc(c)}">${esc(c)}</button>`).join('')}</div>`;
-            return `<div class="${cls}"><div class="chat__msg chat__msg--bot">${esc(m.text)}</div>${extra}</div>`;
+            return `<div class="${cls}"><div class="chat__msg chat__msg--bot${m.followup ? ' chat__msg--followup' : ''}">${esc(m.text)}</div>${extra}</div>`;
           })
           .join('');
         chatLog.forEach((m) => (m.animated = true));
@@ -792,7 +818,9 @@ div#tabbar { margin: 0px 8px; border-radius: 6px; }
         const run = pendingConfirm.run;
         pendingConfirm = null;
         setConfirmUI(false);
-        pushBot(ok ? run() : 'Okay, cancelled — nothing was changed.');
+        const reply = ok ? run() : 'Okay, cancelled — nothing was changed.';
+        pushBot(reply);
+        offerNext(reply);
       }
       function setConfirmUI(on) {
         const foot = chatDoc.getElementById('chatfoot');
@@ -1013,11 +1041,31 @@ div#tabbar { margin: 0px 8px; border-radius: 6px; }
         const res = interpret(text);
         runActivity(planSteps(text, res), () => produceResponse(res));
       }
+      // Contextual "what next?" suggestions based on the resulting state + the reply. Returns null to skip.
+      function nextSteps(reply) {
+        const r = (reply || '').toLowerCase();
+        const sel = [...checked].filter((id) => !removed.has(id)).length;
+        if (/^set \d+ item/.test(r)) return { text: 'What next?', chips: ['Start selected', 'Show downloading'] };
+        if (/\bselected\b/.test(r) && sel > 0) return { text: `${sel} item${sel === 1 ? '' : 's'} selected — what would you like to do next?`, chips: ['Start selected', 'Pause selected', 'Clear selection'] };
+        if (/\bcleared\b/.test(r)) return { text: 'Done — what next?', chips: ['Select all', 'How many downloads?'] };
+        if (/\bdeleted\b/.test(r)) return { text: 'What next?', chips: ['Undo', 'How many downloads?'] };
+        if (/\brestored\b/.test(r)) return { text: 'What next?', chips: ['Select all', 'Show subscriptions'] };
+        if (/\bfiltered\b/.test(r)) return { text: 'What next?', chips: ['Select all', 'How many downloads?'] };
+        if (/\b(started|paused|stopped)\b/.test(r)) return { text: 'What next?', chips: ['Clear selection', 'Show downloading'] };
+        if (/favorit/.test(r)) return { text: 'What next?', chips: ['Clear selection', 'How many downloads?'] };
+        if (/downloads in total|item\(s\)\.\s*$/.test(r)) return { text: 'Anything else?', chips: ['Show subscriptions', 'Find videos about lofi beats'] };
+        return null;
+      }
+      function offerNext(reply) {
+        const fu = nextSteps(reply);
+        if (fu) pushBot(fu.text, { chips: fu.chips, followup: true });
+      }
       function produceResponse(res) {
         if (res.web !== undefined) { showWebResults(res.web); return; }
         if (res.confirm) { pendingConfirm = { run: res.run }; setConfirmUI(true); pushBot(res.reply, { confirm: true }); return; }
-        if (res.run) { pushBot(res.run(), { chips: res.chips }); return; }
-        pushBot(res.reply, { chips: res.chips });
+        const reply = res.run ? res.run() : res.reply;
+        pushBot(reply, { chips: res.chips });
+        if (!res.chips) offerNext(reply);
       }
       function showWebResults(q) {
         const results = webSearch(q);
